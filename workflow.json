@@ -1,8 +1,8 @@
 {
-  "name": "Customer Support Bot — ${CLIENT_NAME}",
+  "name": "AI Customer Support Bot — ${CLIENT_NAME}",
   "nodes": [
     {
-      "id": "webhook-1",
+      "id": "webhook-sup",
       "name": "Support Webhook",
       "type": "n8n-nodes-base.webhook",
       "typeVersion": 2,
@@ -11,110 +11,144 @@
         300
       ],
       "parameters": {
-        "path": "support-${CLIENT_ID}",
         "httpMethod": "POST",
+        "path": "webhook/support-${CLIENT_ID}",
         "responseMode": "responseNode"
       }
     },
     {
-      "id": "code-1",
-      "name": "Parse Message",
+      "id": "extract-sup",
+      "name": "Extract Message",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        440,
+        400,
         300
       ],
       "parameters": {
-        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst message = body.message || body.text || \"\";\nconst from = body.from || body.phone || \"${CLIENT_PHONE}\";\nconst name = body.name || body.customer_name || \"Customer\";\nconst lower = message.toLowerCase();\nlet intent = \"general\";\nif (lower.includes(\"precio\") || lower.includes(\"price\") || lower.includes(\"costo\")) intent = \"pricing\";\nelse if (lower.includes(\"cancelar\") || lower.includes(\"cancel\")) intent = \"cancellation\";\nelse if (lower.includes(\"problema\") || lower.includes(\"error\") || lower.includes(\"no funciona\")) intent = \"technical\";\nelse if (lower.includes(\"hora\") || lower.includes(\"schedule\") || lower.includes(\"cita\")) intent = \"scheduling\";\nreturn [{ json: { message, from, name, intent, clientId: \"${CLIENT_ID}\", clientName: \"${CLIENT_NAME}\", timestamp: new Date().toISOString() } }];"
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nreturn [{ json: {\n  message: body.message || body.text || '',\n  customer_id: body.customer_id || body.from || 'unknown',\n  channel: body.channel || 'webhook',\n  timestamp: new Date().toISOString()\n} }];"
       }
     },
     {
-      "id": "http-1",
-      "name": "AI Response",
+      "id": "history-sup",
+      "name": "Get Customer History",
       "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4,
+      "typeVersion": 4.2,
       "position": [
-        680,
+        600,
         300
       ],
       "parameters": {
-        "method": "POST",
-        "url": "https://api.anthropic.com/v1/messages",
-        "sendHeaders": true,
-        "headerParameters": {
+        "method": "GET",
+        "url": "=https://www.zohoapis.com/crm/v7/Leads/search?criteria=(Phone:equals:{{$json.customer_id}})&fields=Last_Name,Email,Description,Lead_Status",
+        "headers": {
           "parameters": [
             {
-              "name": "x-api-key",
-              "value": "${CLIENT_ID}"
-            },
-            {
-              "name": "anthropic-version",
-              "value": "2023-06-01"
-            },
-            {
-              "name": "content-type",
-              "value": "application/json"
-            }
-          ]
-        },
-        "sendBody": true,
-        "contentType": "json",
-        "body": "={{ JSON.stringify({ model: \"claude-haiku-4-5\", max_tokens: 500, system: \"You are a helpful customer support agent for ${CLIENT_NAME}. Be concise and friendly. If you cannot resolve the issue, offer to connect them with a human agent.\", messages: [{ role: \"user\", content: $json.message }] }) }}"
-      }
-    },
-    {
-      "id": "set-1",
-      "name": "Format Response",
-      "type": "n8n-nodes-base.set",
-      "typeVersion": 3,
-      "position": [
-        920,
-        300
-      ],
-      "parameters": {
-        "assignments": {
-          "assignments": [
-            {
-              "id": "a1",
-              "name": "reply",
-              "value": "={{ $json.content[0].text }}",
-              "type": "string"
-            },
-            {
-              "id": "a2",
-              "name": "intent",
-              "value": "={{ $(\"Parse Message\").first().json.intent }}",
-              "type": "string"
-            },
-            {
-              "id": "a3",
-              "name": "from",
-              "value": "={{ $(\"Parse Message\").first().json.from }}",
-              "type": "string"
-            },
-            {
-              "id": "a4",
-              "name": "client",
-              "value": "${CLIENT_NAME}",
-              "type": "string"
+              "name": "Authorization",
+              "value": "Zoho-oauthtoken ${ZOHO_OAUTH_TOKEN}"
             }
           ]
         }
       }
     },
     {
-      "id": "respond-1",
-      "name": "Send Reply",
-      "type": "n8n-nodes-base.respondToWebhook",
-      "typeVersion": 1,
+      "id": "claude-sup",
+      "name": "Claude Support AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
       "position": [
-        1160,
+        800,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "headers": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{$credentials.anthropicApiKey}}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\"model\":\"claude-haiku-4-5\",\"max_tokens\":512,\"system\":\"You are a helpful customer support agent for ${CLIENT_NAME}. Be concise, friendly, and professional. If you cannot resolve the issue, say so clearly.\",\"messages\":[{\"role\":\"user\",\"content\":\"Customer history: \" + JSON.stringify($('Get Customer History').first().json.data?.[0] || {}) + \"\\n\\nCustomer message: \" + $('Extract Message').first().json.message + \"\\n\\nRespond helpfully.\"}]}"
+      }
+    },
+    {
+      "id": "parse-sup",
+      "name": "Parse AI Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1000,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const resp = $input.first().json;\nconst answer = resp.content?.[0]?.text || 'I apologize, I could not process your request.';\nconst keywords = ['angry', 'furious', 'refund', 'legal', 'cancel', 'lawsuit', 'terrible', 'worst'];\nconst msg = $('Extract Message').first().json.message.toLowerCase();\nconst needs_escalation = keywords.some(kw => msg.includes(kw));\nreturn [{ json: { answer, needs_escalation, customer_id: $('Extract Message').first().json.customer_id, message: $('Extract Message').first().json.message } }];"
+      }
+    },
+    {
+      "id": "if-esc-sup",
+      "name": "Needs Escalation?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        300
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false
+          },
+          "conditions": [
+            {
+              "id": "c1",
+              "leftValue": "={{$json.needs_escalation}}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "alert-sup",
+      "name": "Alert Human Agent",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1400,
+        200
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://ntfy.sh/${CLIENT_ID}-escalation",
+        "sendBody": true,
+        "contentType": "raw",
+        "body": "=ESCALATION NEEDED\nCustomer: {{$json.customer_id}}\nMessage: {{$json.message}}"
+      }
+    },
+    {
+      "id": "respond-sup",
+      "name": "Respond to Customer",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        1600,
         300
       ],
       "parameters": {
         "respondWith": "json",
-        "responseBody": "={{ JSON.stringify({ success: true, reply: $json.reply, intent: $json.intent, client: \"${CLIENT_NAME}\" }) }}"
+        "responseBody": "={{ JSON.stringify({ answer: $json.answer, escalated: $json.needs_escalation, timestamp: new Date().toISOString() }) }}"
       }
     }
   ],
@@ -123,40 +157,80 @@
       "main": [
         [
           {
-            "node": "Parse Message",
+            "node": "Extract Message",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Parse Message": {
+    "Extract Message": {
       "main": [
         [
           {
-            "node": "AI Response",
+            "node": "Get Customer History",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "AI Response": {
+    "Get Customer History": {
       "main": [
         [
           {
-            "node": "Format Response",
+            "node": "Claude Support AI",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Format Response": {
+    "Claude Support AI": {
       "main": [
         [
           {
-            "node": "Send Reply",
+            "node": "Parse AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Response": {
+      "main": [
+        [
+          {
+            "node": "Needs Escalation?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Needs Escalation?": {
+      "main": [
+        [
+          {
+            "node": "Alert Human Agent",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond to Customer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Alert Human Agent": {
+      "main": [
+        [
+          {
+            "node": "Respond to Customer",
             "type": "main",
             "index": 0
           }
@@ -166,5 +240,6 @@
   },
   "settings": {
     "executionOrder": "v1"
-  }
+  },
+  "staticData": null
 }
