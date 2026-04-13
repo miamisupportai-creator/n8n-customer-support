@@ -1,0 +1,170 @@
+{
+  "name": "Customer Support Bot — ${CLIENT_NAME}",
+  "nodes": [
+    {
+      "id": "webhook-1",
+      "name": "Support Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        200,
+        300
+      ],
+      "parameters": {
+        "path": "support-${CLIENT_ID}",
+        "httpMethod": "POST",
+        "responseMode": "responseNode"
+      }
+    },
+    {
+      "id": "code-1",
+      "name": "Parse Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        300
+      ],
+      "parameters": {
+        "jsCode": "const body = $input.first().json.body || $input.first().json;\nconst message = body.message || body.text || \"\";\nconst from = body.from || body.phone || \"${CLIENT_PHONE}\";\nconst name = body.name || body.customer_name || \"Customer\";\nconst lower = message.toLowerCase();\nlet intent = \"general\";\nif (lower.includes(\"precio\") || lower.includes(\"price\") || lower.includes(\"costo\")) intent = \"pricing\";\nelse if (lower.includes(\"cancelar\") || lower.includes(\"cancel\")) intent = \"cancellation\";\nelse if (lower.includes(\"problema\") || lower.includes(\"error\") || lower.includes(\"no funciona\")) intent = \"technical\";\nelse if (lower.includes(\"hora\") || lower.includes(\"schedule\") || lower.includes(\"cita\")) intent = \"scheduling\";\nreturn [{ json: { message, from, name, intent, clientId: \"${CLIENT_ID}\", clientName: \"${CLIENT_NAME}\", timestamp: new Date().toISOString() } }];"
+      }
+    },
+    {
+      "id": "http-1",
+      "name": "AI Response",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        680,
+        300
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "${CLIENT_ID}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            },
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify({ model: \"claude-haiku-4-5\", max_tokens: 500, system: \"You are a helpful customer support agent for ${CLIENT_NAME}. Be concise and friendly. If you cannot resolve the issue, offer to connect them with a human agent.\", messages: [{ role: \"user\", content: $json.message }] }) }}"
+      }
+    },
+    {
+      "id": "set-1",
+      "name": "Format Response",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3,
+      "position": [
+        920,
+        300
+      ],
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a1",
+              "name": "reply",
+              "value": "={{ $json.content[0].text }}",
+              "type": "string"
+            },
+            {
+              "id": "a2",
+              "name": "intent",
+              "value": "={{ $(\"Parse Message\").first().json.intent }}",
+              "type": "string"
+            },
+            {
+              "id": "a3",
+              "name": "from",
+              "value": "={{ $(\"Parse Message\").first().json.from }}",
+              "type": "string"
+            },
+            {
+              "id": "a4",
+              "name": "client",
+              "value": "${CLIENT_NAME}",
+              "type": "string"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "respond-1",
+      "name": "Send Reply",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1160,
+        300
+      ],
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ JSON.stringify({ success: true, reply: $json.reply, intent: $json.intent, client: \"${CLIENT_NAME}\" }) }}"
+      }
+    }
+  ],
+  "connections": {
+    "Support Webhook": {
+      "main": [
+        [
+          {
+            "node": "Parse Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Message": {
+      "main": [
+        [
+          {
+            "node": "AI Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Response": {
+      "main": [
+        [
+          {
+            "node": "Format Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Response": {
+      "main": [
+        [
+          {
+            "node": "Send Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
